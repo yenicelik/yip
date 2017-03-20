@@ -1,0 +1,215 @@
+<?php
+//The central class in our project
+class ShortUrl 
+{
+
+	protected static $chars = "-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+	protected static $chars_id = "-1234567890";
+	protected $pdo;
+
+	/**
+	* Creates PDO for database communication
+	*/
+	public function __construct() { //Check if public
+		ini_set('display_errors', 'On');
+		error_reporting(E_ALL | E_STRICT);
+		try {
+			$pdo_local = new PDO(C_DB_PDODRIVER . ":host=" . C_DB_HOST . ";dbname=" . C_DB_DATABASE . ";port=3306", C_DB_USERNAME, C_DB_PASSWORD);
+			$this->pdo = $pdo_local;
+		} catch (\PDOException $e) {
+			header("Location: error.html");
+			exit;
+		}
+	}
+
+	/********************CONTROLLER SPECIFIC FUNCTIONS START HERE********************/
+	/**
+	 * Returns a word-id that was is not yet used up
+	 * @return string
+     */
+	protected function gen_word_pair($my_url) {
+		$b_unique = false;
+
+		if ($my_url) {
+
+			$cmd = "/home/guyfawkes/anaconda2/bin/python /var/www/include/sCrape.py -u '$my_url'"; //2>&1
+			$response = shell_exec($cmd);
+			//print_r($response);
+			$response = json_decode($response, true);
+			
+			if ($response) {
+				foreach ($response as $word_1) {
+					foreach ($response as $word_2){
+			    		$query = "SELECT * FROM table_main WHERE word_pair = :word_pair LIMIT 1";
+						$stm = $this->pdo->prepare($query);
+						$para = array("word_pair"=> (strval($word_1) . "-" . strval($word_2)) );
+						$stm->execute($para);
+						$result =  $stm->fetchAll();
+						if (empty($result)) {
+							$b_unique = true;
+							return (strval($word_1) . "-" . strval($word_2));
+							break;
+						}
+					}
+				}
+			}		
+		}
+		
+		do {
+			$query = "SELECT * FROM table_word_dict WHERE 1 ORDER BY RAND() LIMIT 200;";
+			$stm = $this->pdo->prepare($query);
+			$stm->execute();
+			$w_array_1 = array();
+
+			while($row = $stm->fetch()) {
+				$w_array_1[] = $row;				
+			}
+
+			$query = "SELECT * FROM table_word_dict WHERE 1 ORDER BY RAND() LIMIT 200;";
+			$stm = $this->pdo->prepare($query);
+			$stm->execute();
+			$w_array_2 = array();
+
+			while($row = $stm->fetch()) {
+				$w_array_2[] = $row;				
+			}
+
+			foreach ($w_array_1 as $word_1) {
+				foreach ($w_array_2 as $word_2){
+	    			$query = "SELECT * FROM table_main WHERE word_pair = :word_pair LIMIT 1";
+					$stm = $this->pdo->prepare($query);
+					$para = array("word_pair"=> (strval($word_1[0]) . "-" . strval($word_2[0])) );
+					$stm->execute($para);
+					$result = $stm->fetchAll();
+					if (empty($result)) {
+						$b_unique = true;
+						return (strval($word_1[0]) . "-" . strval($word_2[0]));
+						break;
+					}
+				}
+			}
+		} while(!$b_unique);
+	} 
+	
+
+	/**
+	 * Insert URL into DB and return word-pair if taken, otherwise false
+	 * @param $long_url
+	 * @return string
+     */
+	protected function url_exists_in_db($long_url) {
+			//$Url should be sanitized before, or within; !
+			// write a sanitizer function!
+			//If URL is taken double, be sure to return the same word-pair ... just not yet
+			try {
+				$query = "SELECT word_pair FROM table_main WHERE long_url = :long_url LIMIT 1;";
+				$stm = $this->pdo->prepare($query);
+				$para = array("long_url"=>$long_url);
+				$stm->execute($para);
+				$result = $stm->fetch();
+				if (empty($result)) {
+					return false;
+				} else {
+					return $result[0];
+				}
+			} catch (Exception $e) {
+				//be sure to take out these exception messages afterwards
+				echo "Exception caught within 'insertUrlInDb': \n\n" , $e->getMessage() , "\n";
+				return false;
+			}
+		}
+
+	/**
+	 * Insert URL into DB, returns True is successfull
+	 * @param $w_id
+	 * @param $long_url
+	 * @param $word_pair
+	 * @return bool
+     */
+	protected function insert_url_in_db($long_url, $word_pair) {
+			//If URL is taken double, be sure to give the same word-pair ... just not yet
+			//$Url should be sanitized before, or within; !
+			// write a sanitizer function!
+			try {
+				$query = "INSERT INTO table_main (long_url, word_pair) VALUES (:long_url, :word_pair);";
+				$stm = $this->pdo->prepare($query);
+				$para = array("long_url"=>$long_url, "word_pair"=>$word_pair);
+				$stm->execute($para);
+				return true;
+			} catch (Exception $e) {
+				//be sure to take out these exception messages afterwards
+				echo "Exception caught within 'insertUrlInDb': \n\n" , $e->getMessage() , "\n";
+				return false;
+			}
+		}
+
+	/***********************URL FROM Functions "Translator" functions************* */
+	/**
+	 * @param $word_pair
+	 * @return mixed
+     */
+	protected function url_from_word_pair($word_pair) {
+			//Implement security functions too maybe, as this will definitely catch input from outer source... maybe rather create a whole new function for that?
+			//Implement whitespace optimization etc
+			//Short code must be of format 'word1-word2'
+
+	    	$query = "SELECT long_url FROM table_main WHERE word_pair = :word_pair LIMIT 1"; //Increment count IF IT IS POSSIBLE to send multiple queries with one 'execute'
+			$stm = $this->pdo->prepare($query);
+			$para = array("word_pair"=>$word_pair);
+			$stm->execute($para);
+			$long_url = $stm->fetch();
+			return $long_url;
+		}
+
+	/********************VERIFIER FUNCTIONS START HERE********************/
+	/**
+	 * Verify if shortcode is in desired format
+	 * @param $word_pair
+	 * @return int
+     */
+	protected function verify_word_pair($word_pair) {
+		//Maybe build-in sanitizer functions here? as this probably will mostly check input from $_GET
+		return preg_match("|[" . self::$chars . "]+|", $word_pair);
+	}
+
+	/**
+	 * Check if URL Format is correct
+	 * @param $url
+	 * @return mixed
+     */
+	protected function verify_url_format($url) {
+		//formerly "validateUrlFormat"
+
+		if (!preg_match("~^(?:f|ht)tps?://~i", $url)) {
+	        $url = "http://" . $url;
+	    }
+		if( strpos(parse_url($url, PHP_URL_HOST), 'yip.bz') !== false) { //MAKE INDEPENDENT!!! EVEN IF LOCALHOST IS NOT A GOOD OPTION
+			return false;
+		}
+		return filter_var($url, FILTER_VALIDATE_URL, FILTER_FLAG_HOST_REQUIRED);
+	}
+
+	/**
+	 * Checks if requested url exists / is not a 404-return
+	 * @param $url
+	 * @return bool
+     */
+	protected function verify_url_exists($url) {
+		$ch = curl_init();
+		curl_setopt($ch, CURLOPT_URL, $url);
+		curl_setopt($ch, CURLOPT_NOBODY, true);
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+		curl_exec($ch);
+		$response = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+		curl_close($ch);
+		return (!empty($response) && $response != 404);
+	}
+
+}
+
+
+
+
+
+
+

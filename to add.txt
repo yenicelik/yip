@@ -1,0 +1,3 @@
+Implement count plus one
+
+Check when Server Http is empty and when not; prepare which ones to send to database/default values;
